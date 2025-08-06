@@ -35,7 +35,7 @@ async function navigateToAudit(page, url) {
     }
   });
 
-  console.log("⏳ Waiting 10 seconds for audit results to appear...");
+  console.log("⏳ Waiting 5 seconds for audit results to appear...");
   await new Promise(resolve => setTimeout(resolve, 5000));
 
   // Expand failed sections
