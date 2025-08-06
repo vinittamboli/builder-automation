@@ -1,0 +1,6 @@
+.env
+
+node_modules/
+manual-profile/
+chrome-profile/
+chrome-puppeteer-profile/
