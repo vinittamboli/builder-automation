@@ -1,4 +1,4 @@
-const path = require('path');
+// index.js
 const { loginOrRestoreSession } = require('./modules/auth');
 const { navigateToAudit } = require('./modules/navigator');
 const { scrapeAuditResults } = require('./modules/scraper');
@@ -7,80 +7,99 @@ const { takeAuditScreenshot } = require('./modules/screenshot');
 const { uploadToCloudinary } = require('./modules/uploader');
 const { readInputSheet, updateInputSheet, saveWorkbook } = require('./modules/spreadsheet');
 
+const TARGET_SECTIONS = new Set([
+  'Page has broken internal links',
+  'Page has broken external links',
+  'Page has broken internal images',
+  'Page has broken external images',
+  'Page’s images are too large',
+]);
+
+const SECTION_SKIP_ACCESSIBILITY = new Set([
+  'Page’s images are too large', // skip accessibility for this one
+]);
+
 (async () => {
   try {
-    console.log('🚀 Starting audit automation...');
-
     const { browser, page } = await loginOrRestoreSession();
 
-    console.log('📖 Reading input sheet...');
     const { workbook, sheet, data } = await readInputSheet();
-    console.log(`📄 ${data.length} records found in sheet`);
 
+    let rowIndex = 0;
     for (const rowData of data) {
+      rowIndex++;
       try {
         const urlCell = rowData['URL'];
         const domain = typeof urlCell === 'object' ? urlCell.text : urlCell;
-        if (!domain || typeof domain !== 'string') {
-          console.warn('⚠️ Skipping row due to invalid or missing domain:', rowData);
-          continue;
-        }
+        if (!domain || typeof domain !== 'string') continue;
 
-        console.log(`\n🌐 Auditing domain: ${domain}`);
-
-        // Step 1: Navigate and trigger audit
+        // 1) Navigate + run
         await page.goto('https://searchenginevisibility.godaddy.com/v2/admin/difysiteaudit', {
           waitUntil: 'networkidle2',
-          timeout: 60000
+          timeout: 60000,
         });
         await navigateToAudit(page, domain);
 
-        // Step 2: Scrape audit results
-        console.log('🔍 Scraping audit results...');
-        const { linksMap } = await scrapeAuditResults(page);
+        // 2) Scrape
+        const { sectionTotals = {}, linksMap = {} } = await scrapeAuditResults(page);
 
-        // Step 3: Flatten & deduplicate links
-        const allLinks = new Set();
-        for (const section in linksMap) {
-          for (const link in linksMap[section]) {
-            allLinks.add(link);
+        // 3) Total count across TARGET_SECTIONS
+        const totalCount = Object.entries(sectionTotals)
+          .filter(([section]) => TARGET_SECTIONS.has(section))
+          .reduce((sum, [, n]) => sum + (Number(n) || 0), 0);
+
+        console.log(`Total link count: ${totalCount}`);
+
+        // 4) Accessibility on UNIQUE links only (excluding "images too large")
+        // Build a map: section -> [unique hrefs]
+        const uniquePerSection = {};
+        for (const [section, hrefCounts] of Object.entries(linksMap)) {
+          if (!TARGET_SECTIONS.has(section)) continue;
+          if (SECTION_SKIP_ACCESSIBILITY.has(section)) continue;
+          uniquePerSection[section] = Object.keys(hrefCounts || {});
+        }
+
+        // Flatten for checking
+        const allUnique = new Set();
+        Object.values(uniquePerSection).forEach(arr => arr.forEach(u => allUnique.add(u)));
+
+        let inaccessibleBySection = {};
+        if (allUnique.size > 0) {
+          const accessibility = await checkUrlAccessibility([...allUnique]);
+          // Rebuild per-section, but keep only inaccessible ones
+          for (const [section, urls] of Object.entries(uniquePerSection)) {
+            const bad = urls.filter(u => accessibility[u] === false);
+            if (bad.length) {
+              inaccessibleBySection[section] = bad;
+            }
           }
         }
-        console.log(`🔗 ${allLinks.size} unique links found`);
 
-        // Step 4: Check accessibility
-        console.log('🌐 Checking accessibility of links...');
-        const accessibility = await checkUrlAccessibility([...allLinks]);
-
-        // Step 5: Count inaccessible links
-        let inaccessibleCount = 0;
-        for (const link of allLinks) {
-          if (!accessibility[link]) inaccessibleCount++;
+        // Only print sections with inaccessible links
+        const sectionsWithInaccessible = Object.keys(inaccessibleBySection);
+        if (sectionsWithInaccessible.length > 0) {
+          for (const sec of sectionsWithInaccessible) {
+            console.log(`Inaccessible in "${sec}":`);
+            for (const u of inaccessibleBySection[sec]) {
+              console.log(`  - ${u}`);
+            }
+          }
         }
-        console.log(`❌ Inaccessible links: ${inaccessibleCount}`);
 
-        // Step 6: Take screenshot
+        // 5) Screenshot + upload
         const screenshotPath = await takeAuditScreenshot(page, domain);
-
-        // Step 7: Upload to Cloudinary
-        console.log('☁️ Uploading screenshot...');
         // const imageUrl = await uploadToCloudinary(screenshotPath);
-        // console.log(`📎 Uploaded: ${imageUrl}`);
 
-        // Step 8: Update spreadsheet
-        await updateInputSheet(sheet, rowData, "Test", inaccessibleCount);
-        console.log('📊 Sheet updated');
+        // 6) Update sheet (U: total count, AH: screenshot URL)
+        await updateInputSheet(sheet, rowData, "imageUrl", totalCount);
 
       } catch (err) {
-        console.error(`❌ Error processing domain ${rowData['URL']}:`, err);
+        console.error(`❌ Error processing domain for row ${rowIndex}:`, err);
       }
     }
 
-    // Final step: Save workbook
     await saveWorkbook(workbook);
-    console.log('\n✅ All records processed and input file updated.');
     await browser.disconnect();
-
   } catch (err) {
     console.error('🚨 Fatal error:', err);
   }
