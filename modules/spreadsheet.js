@@ -39,10 +39,10 @@ async function updateInputSheet(sheet, rowData, cloudinaryUrl, linkCount) {
   console.log(`Updating row ${rowData._row.number} with link count: ${linkCount}, screenshot URL: ${cloudinaryUrl}`);
   const row = rowData._row;
 
-  row.getCell(21).value = linkCount; 
-  console.log(row.getCell(21).value)       // ✅ Column U: Link Count
-  row.getCell(34).value = cloudinaryUrl;    // ✅ Column AH: Screenshot URL
-  console.log(row.getCell(34).value)       // ✅ Column AH: Screenshot URL
+  row.getCell(6).value = linkCount; 
+  console.log(row.getCell(6).value)       // ✅ Column S: Link Count
+  row.getCell(7).value = cloudinaryUrl;    // ✅ Column AH: Screenshot URL
+  console.log(row.getCell(7).value)       // ✅ Column AH: Screenshot URL
   console.log(`📝 Updated row ${row.number}: Link Count → ${linkCount}, Screenshot URL → ${cloudinaryUrl}`);
 }
 
